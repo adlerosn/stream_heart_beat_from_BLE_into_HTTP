@@ -1,4 +1,4 @@
-# Heart Rate BLE to HTTP
+# Heart Beat from BLE into HTTP
 
 Slight modification of an opensource template to be able to retrieve heart sensor data from my Amazfit GTR2 and upload it into a [stream-focused data processing pipeline](https://github.com/adlerosn/stream_heart_beat_from_HTTP).
 
