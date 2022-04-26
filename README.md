@@ -1,4 +1,8 @@
-# Punch Through Android BLE Starter App
+# Heart Rate BLE to HTTP
+
+Slight modification of an opensource template to be able to retrieve heart sensor data from my Amazfit GTR2 and upload it into a [stream-focused data processing pipeline](https://github.com/adlerosn/stream_heart_beat_from_HTTP).
+
+## Punch Through Android BLE Starter App
 
 [![CircleCI build status](https://circleci.com/gh/PunchThrough/ble-starter-android/tree/master.svg?style=svg)](https://circleci.com/gh/PunchThrough/ble-starter-android/tree/master)
 
@@ -13,7 +17,7 @@ Companion Android app project for [Punch Through](https://punchthrough.com)'s "U
 - Bonding with a BLE device
 - Implementing your own BLE operations serial queuing mechanism
 
-## Setup
+### Setup
 
 1. Clone the project to your directory of choice.
 
@@ -25,21 +29,21 @@ git clone https://github.com/PunchThrough/ble-starter-android.git
 3. Navigate to the directory where you cloned the project to, and double click on it.
 4. Wait for Gradle sync to complete.
 
-## Requirements
+### Requirements
 
 This project targets Android 10 and has a min SDK requirement of 21 (Android 5.0), in line with our recommendation in [4 Tips to Make Android BLE Actually Work](https://punchthrough.com/android-ble-development-tips/).
 
-## Contributing
+### Contributing
 
-### Reporting bugs
+#### Reporting bugs
 
 Please [open an issue](https://github.com/PunchThrough/ble-starter-android/issues/new) to report a bug if the app isn't behaving as expected.
 
-### Opening a Pull Request
+#### Opening a Pull Request
 
 Please fork the repository and create a feature branch before opening a Pull Request against the `master` branch.
 
-### Linting and code style
+#### Linting and code style
 
 The project uses Kotlin's default [coding conventions](https://kotlinlang.org/docs/reference/coding-conventions.html) and includes the `.idea/codeStyle` directory in source control. The project also runs [`ktlint`](https://ktlint.github.io) as part of the CI process to ensure code consistency.
 
@@ -55,6 +59,6 @@ Some simpler violations can be automatically formatted by `ktlint` using the fol
 ./gradlew ktlintFormat
 ```
 
-## Licensing
+### Licensing
 
 This project is licensed under the Apache 2.0. For more details, please see [LICENSE](https://github.com/PunchThrough/ble-starter-android/blob/master/LICENSE).

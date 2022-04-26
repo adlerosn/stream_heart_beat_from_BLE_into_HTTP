@@ -38,15 +38,15 @@ import com.punchthrough.blestarterappandroid.ble.isReadable
 import com.punchthrough.blestarterappandroid.ble.isWritable
 import com.punchthrough.blestarterappandroid.ble.isWritableWithoutResponse
 import com.punchthrough.blestarterappandroid.ble.toHexString
-import kotlinx.android.synthetic.main.activity_ble_operations.characteristics_recycler_view
-import kotlinx.android.synthetic.main.activity_ble_operations.log_scroll_view
-import kotlinx.android.synthetic.main.activity_ble_operations.log_text_view
-import kotlinx.android.synthetic.main.activity_ble_operations.mtu_field
-import kotlinx.android.synthetic.main.activity_ble_operations.request_mtu_button
+import com.punchthrough.blestarterappandroid.databinding.ActivityBleOperationsBinding
 import org.jetbrains.anko.alert
+import org.jetbrains.anko.contentView
 import org.jetbrains.anko.noButton
 import org.jetbrains.anko.selector
 import org.jetbrains.anko.yesButton
+import java.io.File
+import java.net.URL
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -54,7 +54,11 @@ import java.util.UUID
 
 class BleOperationsActivity : AppCompatActivity() {
 
+    private lateinit var savedConnection: File
+    private var reconnecting: Boolean = false
+    private lateinit var binder: ActivityBleOperationsBinding
     private lateinit var device: BluetoothDevice
+    private var heartRateUploadTarget: HeartRateUploadTarget? = null
     private val dateFormatter = SimpleDateFormat("MMM d, HH:mm:ss", Locale.US)
     private val characteristics by lazy {
         ConnectionManager.servicesOnDevice(device)?.flatMap { service ->
@@ -75,6 +79,16 @@ class BleOperationsActivity : AppCompatActivity() {
         }.toMap()
     }
     private val characteristicAdapter: CharacteristicAdapter by lazy {
+        val heartRate = characteristics.firstOrNull { "2a37".equals(it.uuid.toString().substring(IntRange(4, 7)), ignoreCase = true) }
+        if (heartRate != null) {
+            binder.heartRateButton.visibility = View.VISIBLE
+            val clicker = { _: View ->
+                binder.heartRateButton.visibility = View.GONE
+                ConnectionManager.enableNotifications(device, heartRate, binder)
+            }
+            binder.heartRateButton.setOnClickListener(clicker)
+            if (reconnecting) clicker(binder.heartRateButton)
+        }
         CharacteristicAdapter(characteristics) { characteristic ->
             showCharacteristicOptions(characteristic)
         }
@@ -86,24 +100,59 @@ class BleOperationsActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
             ?: error("Missing BluetoothDevice from MainActivity!")
+        reconnecting = intent.getBooleanExtra("reconnecting", false)
+
+        savedConnection = File(applicationContext.filesDir, "saved.txt")
 
         setContentView(R.layout.activity_ble_operations)
+        binder = ActivityBleOperationsBinding.bind(contentView!!)
         supportActionBar?.apply {
             setDisplayHomeAsUpEnabled(true)
             setDisplayShowTitleEnabled(true)
             title = getString(R.string.ble_playground)
         }
+        binder.heartRateButton.visibility = View.GONE
+        binder.sendServerButton.visibility = View.GONE
         setupRecyclerView()
-        request_mtu_button.setOnClickListener {
-            if (mtu_field.text.isNotEmpty() && mtu_field.text.isNotBlank()) {
-                mtu_field.text.toString().toIntOrNull()?.let { mtu ->
+        binder.requestMtuButton.setOnClickListener {
+            if (binder.mtuField.text.isNotEmpty() && binder.mtuField.text.isNotBlank()) {
+                binder.mtuField.text.toString().toIntOrNull()?.let { mtu ->
                     log("Requesting for MTU value of $mtu")
                     ConnectionManager.requestMtu(device, mtu)
-                } ?: log("Invalid MTU value: ${mtu_field.text}")
+                } ?: log("Invalid MTU value: ${binder.mtuField.text}")
             } else {
                 log("Please specify a numeric value for desired ATT MTU (23-517)")
             }
             hideKeyboard()
+        }
+
+        val savedConnectionLines = if (savedConnection.exists()) {
+            savedConnection.readLines(charset = Charsets.UTF_8).filterNot { it.isBlank() }}else{
+            listOf()}
+        val savedConnectionEndpoint = savedConnectionLines.getOrElse(1) { "" }
+        if(reconnecting && savedConnectionEndpoint.isNotBlank()) {
+            heartRateUploadTarget = HeartRateUploadTarget(this, savedConnectionEndpoint)
+            binder.sendServerButton.visibility = View.GONE
+        }
+        binder.sendServerButton.setOnClickListener {
+            alert {
+                title = "Send to this address?"
+                val editText = EditText(this.ctx).apply {
+                    text.insert(0, "http://192.168.83.101:37492/hr")
+                    setSelection(text.length)
+                    requestFocus()
+                }
+                customView = editText
+                noButton { it.dismiss() }
+                yesButton { dialog ->
+                    dialog.dismiss()
+                    val target = editText.text.toString()
+                    URL(target)
+                    heartRateUploadTarget = HeartRateUploadTarget(this@BleOperationsActivity, target)
+                    savedConnection.writeText("${device.address}\n$target", charset = Charsets.UTF_8)
+                    binder.sendServerButton.visibility = View.GONE
+                }
+            }.show()
         }
     }
 
@@ -124,7 +173,7 @@ class BleOperationsActivity : AppCompatActivity() {
     }
 
     private fun setupRecyclerView() {
-        characteristics_recycler_view.apply {
+        binder.characteristicsRecyclerView.apply {
             adapter = characteristicAdapter
             layoutManager = LinearLayoutManager(
                 this@BleOperationsActivity,
@@ -134,7 +183,7 @@ class BleOperationsActivity : AppCompatActivity() {
             isNestedScrollingEnabled = false
         }
 
-        val animator = characteristics_recycler_view.itemAnimator
+        val animator = binder.characteristicsRecyclerView.itemAnimator
         if (animator is SimpleItemAnimator) {
             animator.supportsChangeAnimations = false
         }
@@ -144,13 +193,13 @@ class BleOperationsActivity : AppCompatActivity() {
     private fun log(message: String) {
         val formattedMessage = String.format("%s: %s", dateFormatter.format(Date()), message)
         runOnUiThread {
-            val currentLogText = if (log_text_view.text.isEmpty()) {
+            val currentLogText = if (binder.logTextView.text.isEmpty()) {
                 "Beginning of log."
             } else {
-                log_text_view.text
+                binder.logTextView.text
             }
-            log_text_view.text = "$currentLogText\n$formattedMessage"
-            log_scroll_view.post { log_scroll_view.fullScroll(View.FOCUS_DOWN) }
+            binder.logTextView.text = "$currentLogText\n$formattedMessage"
+            binder.logScrollView.post { binder.logScrollView.fullScroll(View.FOCUS_DOWN) }
         }
     }
 
@@ -168,10 +217,10 @@ class BleOperationsActivity : AppCompatActivity() {
                     CharacteristicProperty.Notifiable, CharacteristicProperty.Indicatable -> {
                         if (notifyingCharacteristics.contains(characteristic.uuid)) {
                             log("Disabling notifications on ${characteristic.uuid}")
-                            ConnectionManager.disableNotifications(device, characteristic)
+                            ConnectionManager.disableNotifications(device, characteristic, binder)
                         } else {
                             log("Enabling notifications on ${characteristic.uuid}")
-                            ConnectionManager.enableNotifications(device, characteristic)
+                            ConnectionManager.enableNotifications(device, characteristic, binder)
                         }
                     }
                 }
@@ -215,6 +264,8 @@ class BleOperationsActivity : AppCompatActivity() {
 
             onCharacteristicRead = { _, characteristic ->
                 log("Read from ${characteristic.uuid}: ${characteristic.value.toHexString()}")
+                val isHeartRate =  "2a37".equals(characteristic.uuid.toString().substring(IntRange(4, 7)), ignoreCase = true)
+                if (isHeartRate) heartRateUploadTarget?.send(ByteBuffer.wrap(characteristic.value).short)
             }
 
             onCharacteristicWrite = { _, characteristic ->
@@ -227,6 +278,8 @@ class BleOperationsActivity : AppCompatActivity() {
 
             onCharacteristicChanged = { _, characteristic ->
                 log("Value changed on ${characteristic.uuid}: ${characteristic.value.toHexString()}")
+                val isHeartRate =  "2a37".equals(characteristic.uuid.toString().substring(IntRange(4, 7)), ignoreCase = true)
+                if (isHeartRate) heartRateUploadTarget?.send(ByteBuffer.wrap(characteristic.value).short)
             }
 
             onNotificationsEnabled = { _, characteristic ->
@@ -274,5 +327,5 @@ class BleOperationsActivity : AppCompatActivity() {
     }
 
     private fun String.hexToBytes() =
-        this.chunked(2).map { it.toUpperCase(Locale.US).toInt(16).toByte() }.toByteArray()
+        this.chunked(2).map { it.uppercase(Locale.US).toInt(16).toByte() }.toByteArray()
 }

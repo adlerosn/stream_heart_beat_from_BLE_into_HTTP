@@ -29,7 +29,10 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import android.view.View
+import com.punchthrough.blestarterappandroid.databinding.ActivityBleOperationsBinding
 import timber.log.Timber
+import java.lang.Exception
 import java.lang.ref.WeakReference
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -150,7 +153,16 @@ object ConnectionManager {
         }
     }
 
-    fun enableNotifications(device: BluetoothDevice, characteristic: BluetoothGattCharacteristic) {
+    fun enableNotifications(
+        device: BluetoothDevice,
+        characteristic: BluetoothGattCharacteristic,
+        binder: ActivityBleOperationsBinding? = null
+    ) {
+        val isHeartRate =  "2a37".equals(characteristic.uuid.toString().substring(IntRange(4, 7)), ignoreCase = true)
+        if (isHeartRate && binder != null) {
+            binder.heartRateButton.visibility = View.GONE
+            binder.sendServerButton.visibility = View.VISIBLE
+        }
         if (device.isConnected() &&
             (characteristic.isIndicatable() || characteristic.isNotifiable())
         ) {
@@ -162,7 +174,16 @@ object ConnectionManager {
         }
     }
 
-    fun disableNotifications(device: BluetoothDevice, characteristic: BluetoothGattCharacteristic) {
+    fun disableNotifications(
+        device: BluetoothDevice,
+        characteristic: BluetoothGattCharacteristic,
+        binder: ActivityBleOperationsBinding? = null
+    ) {
+        val isHeartRate =  "2a37".equals(characteristic.uuid.toString().substring(IntRange(4, 7)), ignoreCase = true)
+        if (isHeartRate && binder != null) {
+            binder.heartRateButton.visibility = View.VISIBLE
+            binder.sendServerButton.visibility = View.GONE
+        }
         if (device.isConnected() &&
             (characteristic.isIndicatable() || characteristic.isNotifiable())
         ) {
@@ -219,13 +240,15 @@ object ConnectionManager {
         pendingOperation = operation
 
         // Handle Connect separately from other operations that require device to be connected
-        if (operation is Connect) {
-            with(operation) {
-                Timber.w("Connecting to ${device.address}")
-                device.connectGatt(context, false, callback)
+        try {
+            if (operation is Connect) {
+                with(operation) {
+                    Timber.w("Connecting to ${device.address}")
+                    device.connectGatt(context, false, callback)
+                }
+                return
             }
-            return
-        }
+        }catch (e: SecurityException){throw e;}
 
         // Check BluetoothGatt availability for other operations
         val gatt = deviceGattMap[operation.device]
@@ -237,128 +260,133 @@ object ConnectionManager {
 
         // TODO: Make sure each operation ultimately leads to signalEndOfOperation()
         // TODO: Refactor this into an BleOperationType abstract or extension function
-        when (operation) {
-            is Disconnect -> with(operation) {
-                Timber.w("Disconnecting from ${device.address}")
-                gatt.close()
-                deviceGattMap.remove(device)
-                listeners.forEach { it.get()?.onDisconnect?.invoke(device) }
-                signalEndOfOperation()
-            }
-            is CharacteristicWrite -> with(operation) {
-                gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
-                    characteristic.writeType = writeType
-                    characteristic.value = payload
-                    gatt.writeCharacteristic(characteristic)
-                } ?: this@ConnectionManager.run {
-                    Timber.e("Cannot find $characteristicUuid to write to")
+        try {
+            when (operation) {
+                is Disconnect -> with(operation) {
+                    Timber.w("Disconnecting from ${device.address}")
+                    gatt.close()
+                    deviceGattMap.remove(device)
+                    listeners.forEach { it.get()?.onDisconnect?.invoke(device) }
                     signalEndOfOperation()
                 }
-            }
-            is CharacteristicRead -> with(operation) {
-                gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
-                    gatt.readCharacteristic(characteristic)
-                } ?: this@ConnectionManager.run {
-                    Timber.e("Cannot find $characteristicUuid to read from")
-                    signalEndOfOperation()
-                }
-            }
-            is DescriptorWrite -> with(operation) {
-                gatt.findDescriptor(descriptorUuid)?.let { descriptor ->
-                    descriptor.value = payload
-                    gatt.writeDescriptor(descriptor)
-                } ?: this@ConnectionManager.run {
-                    Timber.e("Cannot find $descriptorUuid to write to")
-                    signalEndOfOperation()
-                }
-            }
-            is DescriptorRead -> with(operation) {
-                gatt.findDescriptor(descriptorUuid)?.let { descriptor ->
-                    gatt.readDescriptor(descriptor)
-                } ?: this@ConnectionManager.run {
-                    Timber.e("Cannot find $descriptorUuid to read from")
-                    signalEndOfOperation()
-                }
-            }
-            is EnableNotifications -> with(operation) {
-                gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
-                    val cccdUuid = UUID.fromString(CCC_DESCRIPTOR_UUID)
-                    val payload = when {
-                        characteristic.isIndicatable() ->
-                            BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
-                        characteristic.isNotifiable() ->
-                            BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                        else ->
-                            error("${characteristic.uuid} doesn't support notifications/indications")
-                    }
-
-                    characteristic.getDescriptor(cccdUuid)?.let { cccDescriptor ->
-                        if (!gatt.setCharacteristicNotification(characteristic, true)) {
-                            Timber.e("setCharacteristicNotification failed for ${characteristic.uuid}")
-                            signalEndOfOperation()
-                            return
-                        }
-
-                        cccDescriptor.value = payload
-                        gatt.writeDescriptor(cccDescriptor)
+                is CharacteristicWrite -> with(operation) {
+                    gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
+                        characteristic.writeType = writeType
+                        characteristic.value = payload
+                        gatt.writeCharacteristic(characteristic)
                     } ?: this@ConnectionManager.run {
-                        Timber.e("${characteristic.uuid} doesn't contain the CCC descriptor!")
+                        Timber.e("Cannot find $characteristicUuid to write to")
                         signalEndOfOperation()
                     }
-                } ?: this@ConnectionManager.run {
-                    Timber.e("Cannot find $characteristicUuid! Failed to enable notifications.")
-                    signalEndOfOperation()
                 }
-            }
-            is DisableNotifications -> with(operation) {
-                gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
-                    val cccdUuid = UUID.fromString(CCC_DESCRIPTOR_UUID)
-                    characteristic.getDescriptor(cccdUuid)?.let { cccDescriptor ->
-                        if (!gatt.setCharacteristicNotification(characteristic, false)) {
-                            Timber.e("setCharacteristicNotification failed for ${characteristic.uuid}")
-                            signalEndOfOperation()
-                            return
-                        }
-
-                        cccDescriptor.value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
-                        gatt.writeDescriptor(cccDescriptor)
+                is CharacteristicRead -> with(operation) {
+                    gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
+                        gatt.readCharacteristic(characteristic)
                     } ?: this@ConnectionManager.run {
-                        Timber.e("${characteristic.uuid} doesn't contain the CCC descriptor!")
+                        Timber.e("Cannot find $characteristicUuid to read from")
                         signalEndOfOperation()
                     }
-                } ?: this@ConnectionManager.run {
-                    Timber.e("Cannot find $characteristicUuid! Failed to disable notifications.")
-                    signalEndOfOperation()
                 }
+                is DescriptorWrite -> with(operation) {
+                    gatt.findDescriptor(descriptorUuid)?.let { descriptor ->
+                        descriptor.value = payload
+                        gatt.writeDescriptor(descriptor)
+                    } ?: this@ConnectionManager.run {
+                        Timber.e("Cannot find $descriptorUuid to write to")
+                        signalEndOfOperation()
+                    }
+                }
+                is DescriptorRead -> with(operation) {
+                    gatt.findDescriptor(descriptorUuid)?.let { descriptor ->
+                        gatt.readDescriptor(descriptor)
+                    } ?: this@ConnectionManager.run {
+                        Timber.e("Cannot find $descriptorUuid to read from")
+                        signalEndOfOperation()
+                    }
+                }
+                is EnableNotifications -> with(operation) {
+                    gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
+                        val cccdUuid = UUID.fromString(CCC_DESCRIPTOR_UUID)
+                        val payload = when {
+                            characteristic.isIndicatable() ->
+                                BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                            characteristic.isNotifiable() ->
+                                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                            else ->
+                                error("${characteristic.uuid} doesn't support notifications/indications")
+                        }
+
+                        characteristic.getDescriptor(cccdUuid)?.let { cccDescriptor ->
+                            if (!gatt.setCharacteristicNotification(characteristic, true)) {
+                                Timber.e("setCharacteristicNotification failed for ${characteristic.uuid}")
+                                signalEndOfOperation()
+                                return
+                            }
+
+                            cccDescriptor.value = payload
+                            gatt.writeDescriptor(cccDescriptor)
+                        } ?: this@ConnectionManager.run {
+                            Timber.e("${characteristic.uuid} doesn't contain the CCC descriptor!")
+                            signalEndOfOperation()
+                        }
+                    } ?: this@ConnectionManager.run {
+                        Timber.e("Cannot find $characteristicUuid! Failed to enable notifications.")
+                        signalEndOfOperation()
+                    }
+                }
+                is DisableNotifications -> with(operation) {
+                    gatt.findCharacteristic(characteristicUuid)?.let { characteristic ->
+                        val cccdUuid = UUID.fromString(CCC_DESCRIPTOR_UUID)
+                        characteristic.getDescriptor(cccdUuid)?.let { cccDescriptor ->
+                            if (!gatt.setCharacteristicNotification(characteristic, false)) {
+                                Timber.e("setCharacteristicNotification failed for ${characteristic.uuid}")
+                                signalEndOfOperation()
+                                return
+                            }
+
+                            cccDescriptor.value = BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+                            gatt.writeDescriptor(cccDescriptor)
+                        } ?: this@ConnectionManager.run {
+                            Timber.e("${characteristic.uuid} doesn't contain the CCC descriptor!")
+                            signalEndOfOperation()
+                        }
+                    } ?: this@ConnectionManager.run {
+                        Timber.e("Cannot find $characteristicUuid! Failed to disable notifications.")
+                        signalEndOfOperation()
+                    }
+                }
+                is MtuRequest -> with(operation) {
+                    gatt.requestMtu(mtu)
+                }
+                else -> with(operation) {}
             }
-            is MtuRequest -> with(operation) {
-                gatt.requestMtu(mtu)
-            }
-        }
+        }catch (e: SecurityException) {throw e;}
     }
 
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             val deviceAddress = gatt.device.address
 
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                if (newState == BluetoothProfile.STATE_CONNECTED) {
-                    Timber.w("onConnectionStateChange: connected to $deviceAddress")
-                    deviceGattMap[gatt.device] = gatt
-                    Handler(Looper.getMainLooper()).post {
-                        gatt.discoverServices()
+            try {
+                if (status == BluetoothGatt.GATT_SUCCESS) {
+                    if (newState == BluetoothProfile.STATE_CONNECTED) {
+                        Timber.w("onConnectionStateChange: connected to $deviceAddress")
+                        deviceGattMap[gatt.device] = gatt
+                        Handler(Looper.getMainLooper()).post {
+                            gatt.discoverServices()
+                        }
+                    } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        Timber.e("onConnectionStateChange: disconnected from $deviceAddress")
+                        teardownConnection(gatt.device)
                     }
-                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                    Timber.e("onConnectionStateChange: disconnected from $deviceAddress")
+                } else {
+                    Timber.e("onConnectionStateChange: status $status encountered for $deviceAddress!")
+                    if (pendingOperation is Connect) {
+                        signalEndOfOperation()
+                    }
                     teardownConnection(gatt.device)
                 }
-            } else {
-                Timber.e("onConnectionStateChange: status $status encountered for $deviceAddress!")
-                if (pendingOperation is Connect) {
-                    signalEndOfOperation()
-                }
-                teardownConnection(gatt.device)
-            }
+            }catch (e: SecurityException){throw e;}
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {

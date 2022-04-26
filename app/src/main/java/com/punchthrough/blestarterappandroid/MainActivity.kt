@@ -17,6 +17,7 @@
 package com.punchthrough.blestarterappandroid
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -29,6 +30,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -37,15 +39,20 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.recyclerview.widget.SimpleItemAnimator
 import com.punchthrough.blestarterappandroid.ble.ConnectionEventListener
 import com.punchthrough.blestarterappandroid.ble.ConnectionManager
-import kotlinx.android.synthetic.main.activity_main.scan_button
-import kotlinx.android.synthetic.main.activity_main.scan_results_recycler_view
+import com.punchthrough.blestarterappandroid.databinding.ActivityMainBinding
 import org.jetbrains.anko.alert
+import org.jetbrains.anko.contentView
 import timber.log.Timber
+import java.io.File
 
 private const val ENABLE_BLUETOOTH_REQUEST_CODE = 1
 private const val LOCATION_PERMISSION_REQUEST_CODE = 2
 
 class MainActivity : AppCompatActivity() {
+
+    private lateinit var savedConnection: File
+    private var reconnecting: Boolean = false
+    private lateinit var binder: ActivityMainBinding
 
     /*******************************************
      * Properties
@@ -67,7 +74,7 @@ class MainActivity : AppCompatActivity() {
     private var isScanning = false
         set(value) {
             field = value
-            runOnUiThread { scan_button.text = if (value) "Stop Scan" else "Start Scan" }
+            runOnUiThread { binder.scanButton.text = if (value) "Stop Scan" else "Start Scan" }
         }
 
     private val scanResults = mutableListOf<ScanResult>()
@@ -93,10 +100,24 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        binder = ActivityMainBinding.bind(contentView!!)
+        savedConnection = File(applicationContext.filesDir, "saved.txt")
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
         }
-        scan_button.setOnClickListener { if (isScanning) stopBleScan() else startBleScan() }
+        binder.scanButton.setOnClickListener {
+            reconnecting = false
+            if (isScanning) stopBleScan() else startBleScan()
+        }
+        binder.reconnectButton.setOnClickListener {
+            reconnecting = true
+            startBleScan()
+        }
+        if (savedConnection.isFile) {
+            binder.reconnectButton.visibility = View.VISIBLE
+        }else{
+            binder.reconnectButton.visibility = View.GONE
+        }
         setupRecyclerView()
     }
 
@@ -140,6 +161,7 @@ class MainActivity : AppCompatActivity() {
      * Private functions
      *******************************************/
 
+    @SuppressLint("MissingPermission")
     private fun promptEnableBluetooth() {
         if (!bluetoothAdapter.isEnabled) {
             val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
@@ -147,19 +169,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @SuppressLint("NotifyDataSetChanged")
     private fun startBleScan() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !isLocationPermissionGranted) {
             requestLocationPermission()
         } else {
             scanResults.clear()
             scanResultAdapter.notifyDataSetChanged()
-            bleScanner.startScan(null, scanSettings, scanCallback)
+            try{
+                bleScanner.startScan(null, scanSettings, scanCallback)
+            }catch (e: SecurityException){throw e;}
             isScanning = true
         }
     }
 
     private fun stopBleScan() {
-        bleScanner.stopScan(scanCallback)
+        try {
+            bleScanner.stopScan(scanCallback)
+        }catch (e: SecurityException){throw e;}
         isScanning = false
     }
 
@@ -184,7 +211,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupRecyclerView() {
-        scan_results_recycler_view.apply {
+        binder.scanResultsRecyclerView.apply {
             adapter = scanResultAdapter
             layoutManager = LinearLayoutManager(
                 this@MainActivity,
@@ -194,7 +221,7 @@ class MainActivity : AppCompatActivity() {
             isNestedScrollingEnabled = false
         }
 
-        val animator = scan_results_recycler_view.itemAnimator
+        val animator = binder.scanResultsRecyclerView.itemAnimator
         if (animator is SimpleItemAnimator) {
             animator.supportsChangeAnimations = false
         }
@@ -205,6 +232,7 @@ class MainActivity : AppCompatActivity() {
      *******************************************/
 
     private val scanCallback = object : ScanCallback() {
+        @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val indexQuery = scanResults.indexOfFirst { it.device.address == result.device.address }
             if (indexQuery != -1) { // A scan result already exists with the same address
@@ -216,6 +244,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 scanResults.add(result)
                 scanResultAdapter.notifyItemInserted(scanResults.size - 1)
+            }
+            if (reconnecting) {
+                val savedConnectionLines =
+                    savedConnection.readLines(charset = Charsets.UTF_8).filterNot { it.isBlank() }
+                val savedConnectionAddress = savedConnectionLines.getOrElse(0) { "" }
+                val indexToConnect =
+                    scanResults.indexOfFirst { it.device.address == savedConnectionAddress }
+                if (indexToConnect != -1)
+                    scanResultAdapter.onClickListener(scanResults[indexToConnect])
             }
         }
 
@@ -229,6 +266,7 @@ class MainActivity : AppCompatActivity() {
             onConnectionSetupComplete = { gatt ->
                 Intent(this@MainActivity, BleOperationsActivity::class.java).also {
                     it.putExtra(BluetoothDevice.EXTRA_DEVICE, gatt.device)
+                    it.putExtra("reconnecting", reconnecting)
                     startActivity(it)
                 }
                 ConnectionManager.unregisterListener(this)
@@ -238,7 +276,12 @@ class MainActivity : AppCompatActivity() {
                     alert {
                         title = "Disconnected"
                         message = "Disconnected or unable to connect to device."
-                        positiveButton("OK") {}
+                        positiveButton("OK") {
+                            reconnecting = false
+                        }
+                        onCancelled {
+                            reconnecting = false
+                        }
                     }.show()
                 }
             }

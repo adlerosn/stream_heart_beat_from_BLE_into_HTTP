@@ -21,8 +21,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.RecyclerView
 import com.punchthrough.blestarterappandroid.ble.printProperties
-import kotlinx.android.synthetic.main.row_characteristic.view.characteristic_properties
-import kotlinx.android.synthetic.main.row_characteristic.view.characteristic_uuid
+import com.punchthrough.blestarterappandroid.databinding.RowCharacteristicBinding
 import org.jetbrains.anko.layoutInflater
 
 class CharacteristicAdapter(
@@ -52,8 +51,9 @@ class CharacteristicAdapter(
     ) : RecyclerView.ViewHolder(view) {
 
         fun bind(characteristic: BluetoothGattCharacteristic) {
-            view.characteristic_uuid.text = characteristic.uuid.toString()
-            view.characteristic_properties.text = characteristic.printProperties()
+            val binder = RowCharacteristicBinding.bind(view)
+            binder.characteristicUuid.text = characteristic.uuid.toString()
+            binder.characteristicProperties.text = characteristic.printProperties()
             view.setOnClickListener { onClickListener.invoke(characteristic) }
         }
     }
